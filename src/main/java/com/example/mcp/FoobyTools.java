@@ -1,5 +1,10 @@
 package com.example.mcp;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import org.springframework.ai.tool.ToolCallbackProvider;
@@ -9,23 +14,12 @@ import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.stereotype.Service;
-import org.springframework.http.MediaType;
-import org.springframework.http.converter.StringHttpMessageConverter;
-import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
-
-import java.nio.charset.StandardCharsets;
 
 @Service
 class FoobyTools {
 
-	private final RestClient foobyClient;
-
-	FoobyTools(RestClient.Builder restClientBuilder) {
-		this.foobyClient = restClientBuilder
-			.baseUrl("https://fooby.ch/hawaii_search.sri")
-			.build();
-	}
+	private final HttpClient httpClient = HttpClient.newBuilder().build();
 
 	@Tool(description = "Search recipes, menus, and other results on Fooby")
 	public String foobySearch(
@@ -76,10 +70,21 @@ class FoobyTools {
 		if (zeitaufwandMax != null) uri.queryParam("zeitaufwand_max", zeitaufwandMax);
 		if (zeitaufwandAktiv != null) uri.queryParam("zeitaufwand_aktiv", zeitaufwandAktiv);
 
-		return foobyClient.get()
-			.uri(uri.build().toUri())
-			.retrieve()
-			.body(String.class);
+		try {
+			URI endpoint = uri.build().toUri();
+			HttpRequest request = HttpRequest.newBuilder(endpoint)
+				.header("Accept", "application/json")
+				.GET()
+				.build();
+			HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+			if (response.statusCode() >= 400) {
+				throw new IllegalStateException("Fooby API returned HTTP " + response.statusCode() + ": " + response.body());
+			}
+			return response.body();
+		} catch (java.io.IOException | InterruptedException exception) {
+			Thread.currentThread().interrupt();
+			throw new IllegalStateException("Could not call Fooby API", exception);
+		}
 	}
 
 	private void addListQueryParams(UriComponentsBuilder uri, String name, List<String> values) {
@@ -93,16 +98,6 @@ class FoobyTools {
 
 @Configuration
 class McpToolConfiguration {
-
-	@Bean
-	RestClient.Builder restClientBuilder() {
-		StringHttpMessageConverter stringConverter = new StringHttpMessageConverter(StandardCharsets.UTF_8);
-		stringConverter.setSupportedMediaTypes(List.of(MediaType.APPLICATION_JSON, MediaType.TEXT_PLAIN));
-		return RestClient.builder()
-			.configureMessageConverters(converters -> converters
-				.withStringConverter(stringConverter)
-				.registerDefaults());
-	}
 
 	@Bean
 	ToolCallbackProvider toolCallbackProvider(FoobyTools foobyTools) {
